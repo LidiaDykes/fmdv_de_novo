@@ -1,7 +1,7 @@
 # fmdv_de_novo
 A collection of bash scripts allowing for automated de novo assembly of FMDV paired-end Illumina data. 
 
-A bunch of bash scripts which allows for (mostly) automated de novo assembly of Illumina paired-end reads from multiple samples. Generated some years ago and published here for a purpose of a doctoral dissertation. Obsolete, however feel free to clone if of use. Contains FMDV genomic database (see data directory) obtained from Pirbright’s https://www.fmdbase.org/ in 2023, which is used to filter FMDV contigs. Dependencies: spades (SPAdes-3.15.5 or later), seqkit, fastqc, fastq_screen, scaffold_builder.py, mafft, bwa which you need to install (many available via conda). Scripts assume that all dependencies and FMDV database are in your path or the current directory.
+A bunch of bash scripts which allow for (mostly) automated de novo assembly of Illumina paired-end reads from multiple samples. Generated some years ago and published here for a purpose of a doctoral dissertation. Obsolete, however feel free to clone if of use. Contains FMDV genomic database (see data directory) obtained from Pirbright’s https://www.fmdbase.org/ in 2023, which is used to filter FMDV contigs. Dependencies: spades (SPAdes-3.15.5 or later), seqkit, fastqc, fastq_screen, scaffold_builder.py, mafft, bwa which you need to install (many available via conda). Scripts assume that all dependencies and FMDV database are in your path or the current directory.
 
 Step 1: ORGANISE FASTQ FILES
 1) Run organise_fastq_files.bsh
