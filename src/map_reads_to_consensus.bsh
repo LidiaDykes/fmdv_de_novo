@@ -1,0 +1,79 @@
+#!/bin/bash
+
+
+# DE NOVO ASSEMBLY : PART 4: MAP READS TO DE NOVO CONSENSUS
+# activate appropriate conda environment
+# this script will map quality filtered reads using BWA MEM
+# run using sbatch --wrap "map_reads_to_consensus.bsh"
+
+module load R/latest
+
+path=$(pwd)
+declare -a array=($(ls --ignore='*.*'))
+for i in "${array[@]}"
+do
+#echo "$i"
+cd ${path}/$i
+
+var=$i
+
+
+# RUN BWA MEM:
+
+#index reference file:
+
+bwa index ${var%_L0*}_*_final.fa
+
+
+# map reads to the reference using BWA:
+
+## mapp paired reads:
+bwa mem -t 16 ${var%_L0*}_*_final.fa paired_reads/trimmed_reads_sk_R1_rmdup.tagged_filter.fastq paired_reads/trimmed_reads_sk_R2_rmdup.tagged_filter.fastq > ${var%_L0*}_bwa_mapped_pe.sam
+
+## map unpaired reads:
+bwa mem -t 16 ${var%_L0*}_*_final.fa paired_reads/trimmed_reads_sk_rmdup_tagged_filter_unpaired.fastq > ${var%_L0*}_bwa_mapped_se.sam
+
+
+#convert SAM file to BAM file:
+
+samtools view -bS ${var%_L0*}_bwa_mapped_pe.sam > ${var%_L0*}_bwa_mapped_pe.bam
+samtools view -bS ${var%_L0*}_bwa_mapped_se.sam > ${var%_L0*}_bwa_mapped_se.bam
+
+
+# sort BAM file: 
+
+samtools sort ${var%_L0*}_bwa_mapped_pe.bam -o ${var%_L0*}_bwa_mapped_pe.sorted.bam
+samtools sort ${var%_L0*}_bwa_mapped_se.bam -o ${var%_L0*}_bwa_mapped_se.sorted.bam
+
+
+
+# index BAM file:
+samtools index ${var%_L0*}_bwa_mapped_pe.sorted.bam
+samtools index ${var%_L0*}_bwa_mapped_se.sorted.bam
+
+
+# create fasta index: 
+samtools faidx ${var%_L0*}_*_final.fa
+
+
+# create the final consensus:
+# samtools mpileup [-EB] [-C capQcoef] [-r reg] [-f in.fa] [-l list] [-Q minBaseQ] [-q minMapQ] in.bam [in2.bam [...]]
+samtools mpileup -uf ${var%_L0*}_*_final.fa ${var%_L0*}_bwa_mapped_pe.sorted.bam ${var%_L0*}_bwa_mapped_se.sorted.bam | bcftools call -c - | vcfutils.pl vcf2fq > ${var%_L0*}_bwa_mapped_consensus.fq
+
+
+# convert fastq file to fasta file:
+seqkit fq2fa ${var%_L0*}_bwa_mapped_consensus.fq -o ${var%_L0*}_bwa_mapped_consensus.fa
+
+
+# create coverage plot:
+
+samtools depth ${var%_L0*}_bwa_mapped_pe.sorted.bam ${var%_L0*}_bwa_mapped_se.sorted.bam > coverage.txt
+awk '{print $2, $3}' coverage.txt > coverage_new.txt
+
+Rscript plot_coverage.r
+
+mv coverage_plot.pdf ${var%_L0*}_coverage_plot.pdf
+
+echo "You can view PDF files by running command: evince file_name.pdf &"
+
+done

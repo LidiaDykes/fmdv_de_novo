@@ -1,0 +1,145 @@
+#!/bin/bash
+
+# run using sbatch --wrap "script"
+
+# DE NOVO ASSEMBLY : PART 2: RUN DE NOVO ASSEMBLY
+# activate appropriate conda environment before running the script 
+# run this from your "analysis_date" directory
+# this script will run denovo assembly on all subdirectories which contain paired fastq.gz data
+# remeber to visualise output of FastQ and FastQScreen 
+
+
+# check if all argument are provided:
+if [ "$#" -ne 1 ]; then
+    echo "Usage: $0 <path_to_fastq_screen_config>"
+    exit 1
+fi
+
+path=$(pwd)
+
+# path to FastQ Screen confirguration file: 
+fqscreen_path=$1
+
+declare -a array=($(ls --ignore='*.*'))
+for i in "${array[@]}"
+do
+#echo "$i"
+cd ${path}/$i
+
+
+# check quality of data using FastQC:
+fastqc *_R1*.fastq.gz *_R2*.fastq.gz
+
+# de-duplicate the reads after the trimming step, since the ends appear error-prone, they might differ even in duplicates. 
+
+# trim ends with Prinseq++
+prinseq++ -fastq *_R1*.fastq.gz -trim_left 15 -trim_right 5 -out_format 0 -out_name trimmed_reads_R1
+prinseq++ -fastq *_R2*.fastq.gz -trim_left 15 -trim_right 5 -out_format 0 -out_name trimmed_reads_R2
+
+# quality filter with Sickle 
+# sickle seems to be the only program which uses a sliding window and tehrefore trims parts of a read with poor quality rather than removing the whole read:
+sickle se -f trimmed_reads_R1_good_out.fastq -t sanger -o trimmed_reads_sk_R1.fastq -q 30 -l 70 -n -x
+sickle se -f trimmed_reads_R2_good_out.fastq -t sanger -o trimmed_reads_sk_R2.fastq -q 30 -l 70 -n -x
+
+# remove duplicates with SeqKit:
+cat trimmed_reads_sk_R1.fastq | seqkit rmdup -s -o trimmed_reads_sk_R1_rmdup.fastq -d trimmed_reads_sk_R1_duplicated.fastq -D trimmed_reads_sk_R1_duplicated_stat.txt
+cat trimmed_reads_sk_R2.fastq | seqkit rmdup -s -o trimmed_reads_sk_R2_rmdup.fastq -d trimmed_reads_sk_R2_duplicated.fastq -D trimmed_reads_sk_R2_duplicated_stat.txt
+## -s # by sequence
+## -o # output
+## -d # save duplicated sequences in this output (maybe do not use it as you will end up with large duplication of data)
+## -D # print list of duplicated sequences
+
+# remove contamination using FastQ Screen:
+# change path to the onfiguration file on your system: 
+fastq_screen --aligner bowtie2 --conf $fqscreen_path/fastq_screen.conf --nohits --subset 0 trimmed_reads_sk_R1_rmdup.fastq trimmed_reads_sk_R2_rmdup.fastq
+# will output trimmed_reads_sk_R[12]_rmdup.tagged_filter.fastq which contain reads which are not contaminants. 
+
+# Using FastQC test if any potential contamination was removed:
+fastqc trimmed_reads_sk_R1_rmdup.tagged_filter.fastq trimmed_reads_sk_R2_rmdup.tagged_filter.fastq
+
+
+#Seperating reads into paired and unpaired reads using seqkit pair:
+seqkit pair -1 trimmed_reads_sk_R1_rmdup.tagged_filter.fastq -2 trimmed_reads_sk_R2_rmdup.tagged_filter.fastq -O paired_reads -u
+# -u # save unpaired reads into a file (do not specify file name as you will get an error)
+# -O # output directory
+# -1 and -2 # R1 and R2 fastq file
+
+
+# merging unpaired reads into a single file:
+cat paired_reads/trimmed_reads_sk_R1_rmdup.tagged_filter.unpaired.fastq >> paired_reads/trimmed_reads_sk_rmdup_tagged_filter_unpaired.fastq
+cat paired_reads/trimmed_reads_sk_R2_rmdup.tagged_filter.unpaired.fastq >> paired_reads/trimmed_reads_sk_rmdup_tagged_filter_unpaired.fastq
+
+
+
+# SPAdes de novo assembly:
+
+
+# run SPAdes careful mode:
+# SPAdes v3.13.1 is installed system-wide, therefore specify PATH to SPAdes 3.15.5: 
+# SPAdes v3.13.1 does not seem to have a --metaviral mode, if using SPAdes v3.13.1, deactivate metaviral mode:
+spades.py -k 21,33,55,77 --careful -1 paired_reads/trimmed_reads_sk_R1_rmdup.tagged_filter.fastq -2 paired_reads/trimmed_reads_sk_R2_rmdup.tagged_filter.fastq -s paired_reads/trimmed_reads_sk_rmdup_tagged_filter_unpaired.fastq -o spades_careful
+cat spades_careful/contigs.fasta >> spades_contigs.fa
+
+# run SPAdes metaviral mode:
+spades.py -k 21,33,55,77 --metaviral -1 paired_reads/trimmed_reads_sk_R1_rmdup.tagged_filter.fastq -2 paired_reads/trimmed_reads_sk_R2_rmdup.tagged_filter.fastq -s paired_reads/trimmed_reads_sk_rmdup_tagged_filter_unpaired.fastq -o spades_metaviral
+cat spades_metaviral/before_rr.fasta >> spades_contigs.fa
+
+# rename duplicated sequences: otherwise you get an error:
+seqkit rename spades_contigs.fa > spades_contigs_rename_dupl.fa
+
+# remove duplicates (by sequence) using SeqKit:
+# -s # remove by sequence
+# -i # ignore case
+# -o # output
+# -D # list duplicated sequences to a file
+cat spades_contigs_rename_dupl.fa | seqkit rmdup -s -i -o spades_contigs_rm_dupl.fa -D list_of_duplicated_contigs.txt
+
+
+# order contigs by length using SeqKit:
+# not needed if you use only  --careful or --isolate mode of SPAdes and contigs.fasta is available.
+# needed for before_rr.fasta
+# conda deactivate
+# conda activate IDBA_de_novo
+cat spades_contigs_rm_dupl.fa | seqkit sort -l -r > spades_contigs_rm_dupl_sorted.fa
+# -l # sort by length (ascendingly)
+# -r # reverse 
+
+
+
+# BLASTn of contigs:
+
+# blast contigs:
+
+# against whole genome database:
+blastn -query spades_contigs_rm_dupl_sorted.fa -db all-FMDV-Seqs.fas -out FMDV_contigs_BLASTn_max_hsps.txt -evalue 1e-30 -outfmt 6 -max_target_seqs 1 -max_hsps 1
+
+# extract the 1st column (i.e, contig IDs):
+awk '{print $1}' FMDV_contigs_BLASTn_max_hsps.txt > FMDV_contigs_ids_BLASTn_max_hsps.txt
+
+# extracting contigs which blasted to the FMDV database based on contig ID:
+seqkit grep -f FMDV_contigs_ids_BLASTn_max_hsps.txt spades_contigs_rm_dupl_sorted.fa > FMDV_contigs_BLASTn_max_hsps.fasta
+
+
+# blasting contigs against FMDV 5'UTR database:
+## change 5' UTR database to the S-fragment database!!!! 
+blastn -query spades_contigs_rm_dupl_sorted.fa -db all-FMDV-Seqs_aln_5UTR.fas -out 5UTR_FMDV_contigs_max_hsps.txt -evalue 1e-30 -outfmt 6 -max_target_seqs 1 -max_hsps 1
+
+# extract the 1st column (i.e, contig IDs):
+awk '{print $1}' 5UTR_FMDV_contigs_max_hsps.txt > 5UTR_FMDV_contigs_max_hsps_ids.txt
+
+# extracting contigs which blasted to the FMDV database based on contig ID:
+seqkit grep -f 5UTR_FMDV_contigs_max_hsps_ids.txt spades_contigs_rm_dupl_sorted.fa > 5UTR_FMDV_contigs_BLASTn_max_hsps.fasta
+
+# concatenate all FMDV contigs:
+cat FMDV_contigs_BLASTn_max_hsps.fasta >> all_FMDV_contigs.fasta
+cat 5UTR_FMDV_contigs_BLASTn_max_hsps.fasta >> all_FMDV_contigs.fasta
+
+# Using SeqKit to remove duplicated contigs (based on contigs’ sequence):
+# -s # remove by sequence
+# -i # ignore case
+# -o # output
+# -D # list duplicated sequences to a file
+cat all_FMDV_contigs.fasta | seqkit rmdup -s -i -o all_FMDV_contigs_rmdup.fasta -D list_of_duplicated_contigs_2.txt
+
+done
+

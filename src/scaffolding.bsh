@@ -1,0 +1,47 @@
+#!/bin/bash
+
+# run using sbatch --wrap "script"
+
+# DE NOVO ASSEMBLY : PART 3: SCAFFOLD CONTIGS 
+# Script to be used after de_novo_assembly.bsh.
+# Activate appropriate conda environment before running the script.
+# Run the script from your "analysis_date" directory.
+# This script will run Scaffold Builder and align all the scaffolds to the closest reference genome for all the directories.
+# After completion, visualise aligned contigs in AliView. 
+
+path=$(pwd)
+declare -a array=($(ls --ignore='*.*'))
+for i in "${array[@]}"
+do
+#echo "$i"
+cd ${path}/$i
+var=$i
+
+# scaffolding contigs: 
+
+# print reference id from the Blastn output:
+# since de_novo_assembly.bsh ordered the contigs by size, this will print the reference genome which matches the largest contig;
+awk 'NR==1 {print $2}' FMDV_contigs_BLASTn_max_hsps.txt > scaffold_reference_id.txt
+# NR==1 # first row
+# $2 # 2nd column
+
+# obtain the reference sequence from the FMDV database:
+seqkit grep -f scaffold_reference_id.txt all-FMDV-Seqs.fas -o scaffold_reference.fa
+
+
+# run Scaffold Builder (see for options: https://github.com/metageni/Scaffold_builder):
+scaffold_builder.py -q all_FMDV_contigs_rmdup.fasta -r scaffold_reference.fa -p ${var%_L0*}_SPAdes_scaffolded_i98b1 -i 98 -b 1
+# -q # fasta file of contigs
+# -r # fasta file containing the closesnt reference genome 
+# -i # minimum identity for merging contigs (default 80%)
+# -b # -b 0/1 dictates behavior for rearrangements (default 0): 0: place end-to-end, 1: create new scaffold sequence
+
+# align scaffolds (note for output from IDBA-UD you need to seperate scaffolds from contigs):
+einsi --addfragments ${var%_L0*}_SPAdes_scaffolded_i98b1_Scaffold.fasta --thread 8 scaffold_reference.fa > ${var%_L0*}_aligned_scaffolds_mafft_addfr.fa
+
+done
+
+
+# display the message: 
+echo "To generate consensus de novo assembly, move the aligned contigs file to the Windows machine and create a consensus reference genome using AliView and BioEdit."
+
